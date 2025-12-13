@@ -97,18 +97,18 @@ class App:
         
         path_unitlib = os.path.join(gd, "scripts", "datatables", "master_unitlib.lua")
         
-        self.status_var.set("Status: Loading UnitLib...")
-        self.root.update()
-        
-        res = self.parser.load_master_unitlib(path_unitlib)
-        if "Error" in res:
-             print("UnitLib Load Warning:", res)
-
         # Load Master Classes
         res = self.parser.load_master_vehicle_classes(os.path.join(gd, PATH_MASTER_LUA))
         if "Error" in res:
             messagebox.showerror("Error", res)
             return
+
+        self.status_var.set("Status: Loading UnitLib...")
+        self.root.update()
+
+        res = self.parser.load_master_unitlib(path_unitlib)
+        if "Error" in res:
+            print("UnitLib Load Warning:", res)
 
         # Load Missions
         res = self.parser.load_missions(os.path.join(gd, PATH_MISSION_TREE))
