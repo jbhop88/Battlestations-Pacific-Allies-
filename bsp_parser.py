@@ -23,12 +23,13 @@ ALWAYS_INCLUDE_ENUMS = {
 class BSPParser:
     def __init__(self, game_root):
         self.root = game_root
-        self.enums = {} 
-        self.master_units = {} 
+        self.enums = {}
+        self.master_units = {}
         self.master_unitlib = {} # Stores UnitLib content mapped by VehicleClass ID
+        self.unitlib_groups = [] # Preserves group ordering and metadata from Master_unitlib
         self.unitlib_header = "" # Stores the top part of UnitLib (Global vars)
-        self.missions = [] 
-        self.non_unit_lua = [] 
+        self.missions = []
+        self.non_unit_lua = []
         self.always_include_lua = ""
         self.always_include_ids = set()
 
@@ -124,6 +125,9 @@ class BSPParser:
             with open(path, 'r', encoding='latin-1') as f:
                 content = f.read()
 
+            self.master_unitlib = {}
+            self.unitlib_groups = []
+
             # Capture header (UnitLib = {})
             first_brace = content.find('{')
             if first_brace != -1:
@@ -131,44 +135,76 @@ class BSPParser:
             else:
                 self.unitlib_header = "UnitLib = {"
 
-            # Regex to find table entries: ["SomeName"] = { ... }
-            # We look for the ["VehicleClass"] = ID inside the block
-            # This regex captures the key and the content inside the top-level braces
-            # Note: This is a simplified parser. If UnitLib is very nested, it might need adjustment.
-            
-            # Strategy: Find start of an entry, then balance braces, then scan inside for VehicleClass ID
-            iterator = re.finditer(r'\["([^"]+)"\]\s*=\s*\{', content)
-            
-            for match in iterator:
-                key_name = match.group(1)
-                start_idx = match.end() - 1 # Points to the opening {
-                
-                # Balance braces to find end of this block
-                brace_count = 0
-                current_idx = start_idx
-                
-                # Scan forward
-                while current_idx < len(content):
-                    char = content[current_idx]
-                    if char == '{': brace_count += 1
-                    elif char == '}': brace_count -= 1
-                    
-                    current_idx += 1
-                    if brace_count == 0: break
-                
-                full_block = content[match.start():current_idx] + "," # Add comma for table list
-                
-                # Check for VehicleClass inside this block
-                vc_match = re.search(r'\["VehicleClass"\]\s*=\s*(\d+)', full_block)
-                if vc_match:
+            # Extract the full UnitLib body (inside the first top-level braces)
+            def _find_matching_brace(start_idx: int) -> int:
+                depth = 0
+                for idx in range(start_idx, len(content)):
+                    if content[idx] == '{':
+                        depth += 1
+                    elif content[idx] == '}':
+                        depth -= 1
+                    if depth == 0:
+                        return idx
+                return -1
+
+            outer_close = _find_matching_brace(first_brace)
+            if outer_close == -1:
+                return "Error loading Master UnitLib: could not match UnitLib braces"
+
+            body = content[first_brace + 1:outer_close]
+
+            def _extract_blocks(segment: str):
+                blocks = []
+                idx = 0
+                while idx < len(segment):
+                    if segment[idx] == '{':
+                        depth = 1
+                        start = idx
+                        idx += 1
+                        while idx < len(segment) and depth > 0:
+                            if segment[idx] == '{':
+                                depth += 1
+                            elif segment[idx] == '}':
+                                depth -= 1
+                            idx += 1
+                        blocks.append(segment[start:idx])
+                    else:
+                        idx += 1
+                return blocks
+
+            group_blocks = _extract_blocks(body)
+
+            for group_block in group_blocks:
+                # Separate header (GroupName/comments) from unit entries
+                group_body = group_block[1:-1]  # remove outer braces
+                entry_blocks = _extract_blocks(group_body)
+
+                header_text = ""
+                if entry_blocks:
+                    first_entry = entry_blocks[0]
+                    first_idx = group_body.find(first_entry)
+                    header_text = group_body[:first_idx].strip()
+
+                stored_entries = []
+                for entry in entry_blocks:
+                    vc_match = re.search(r'\["VehicleClass"\]\s*=\s*(\d+)', entry)
+                    if not vc_match:
+                        continue
                     vc_id = int(vc_match.group(1))
-                    
+                    stored_entries.append((vc_id, entry))
+
                     if vc_id not in self.master_unitlib:
                         self.master_unitlib[vc_id] = []
-                    self.master_unitlib[vc_id].append(full_block)
+                    self.master_unitlib[vc_id].append(entry)
+
+                if stored_entries:
+                    self.unitlib_groups.append({
+                        "header": header_text,
+                        "entries": stored_entries,
+                    })
 
             print(f"Loaded UnitLib data for {len(self.master_unitlib)} unique VehicleClass IDs")
-            
+
         except Exception as e:
             return f"Error loading Master UnitLib: {e}"
         return "Success"
@@ -288,27 +324,41 @@ class BSPParser:
         # --- 4. WRITE UnitLib.lua ---
         ul_lines = []
         # Use captured header or default
-        ul_lines.append(self.unitlib_header if self.unitlib_header else "UnitLib = {")
+        ul_lines.append(self.unitlib_header.strip() if self.unitlib_header else "UnitLib = {")
         ul_lines.append(f"-- Filtered UnitLib for Mission: {mission_def.name}")
-        
+
         ul_write_count = 0
-        
+
         # Combine AlwaysInclude IDs + Mission Required IDs for UnitLib
         all_needed_ids = required_ids.union(self.always_include_ids)
-        
-        for uid in sorted(all_needed_ids):
-            if uid in self.master_unitlib:
-                # One ID might have multiple UnitLib entries
-                for block in self.master_unitlib[uid]:
-                    ul_lines.append(block)
-                    ul_write_count += 1
-        
+
+        for group in self.unitlib_groups:
+            filtered_entries = [(vc_id, block) for vc_id, block in group["entries"] if vc_id in all_needed_ids]
+            if not filtered_entries:
+                continue
+
+            ul_lines.append("{")
+            if group["header"]:
+                ul_lines.append(group["header"].rstrip())
+
+            for idx, (_, entry) in enumerate(filtered_entries):
+                entry_clean = entry.strip()
+                needs_comma = not entry_clean.rstrip().endswith(",")
+                suffix = "," if needs_comma else ""
+                ul_lines.append(f"{entry_clean}{suffix}")
+                if idx < len(filtered_entries) - 1:
+                    ul_lines.append("")
+
+            ul_lines.append("},")
+            ul_write_count += len(filtered_entries)
+
         ul_lines.append("}") # Close the UnitLib table
 
-        ul_path = os.path.join(self.root, "scripts", "datatables", "autoload", "UnitLib.lua")
+        ul_path = os.path.join(self.root, "scripts", "datatables", "UnitLib.lua")
 
         try:
             os.makedirs(os.path.dirname(vc_path), exist_ok=True)
+            os.makedirs(os.path.dirname(ul_path), exist_ok=True)
             
             with open(vc_path, 'w', encoding='utf-8') as f:
                 f.write("\n\n".join(vc_lines))
