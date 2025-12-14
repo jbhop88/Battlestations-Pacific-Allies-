@@ -93,6 +93,7 @@ class BSPParser:
         self.always_include_lua = ""
         self.always_include_ids = set()
         self.group_templates = {}
+        self.mission_groups_raw = ""
         self.multi_template = {"prefix": "", "suffix": ""}
 
     def load_always_include(self, path):
@@ -317,6 +318,14 @@ class BSPParser:
             self.group_templates = {}
             self.missions = []
 
+            # Capture full missionGroups block for direct reuse (prevents crashes when omitted)
+            mg_match = re.search(r'MissionTree\s*\[\s*"missionGroups"\s*\]\s*=\s*\{', content)
+            if mg_match:
+                mg_brace_start = content.find('{', mg_match.end() - 1)
+                mg_block = self._extract_block(content, mg_brace_start)
+                mg_prefix = content[mg_match.start():mg_brace_start]
+                self.mission_groups_raw = f"{mg_prefix}{mg_block}"
+
             search_idx = 0
             while True:
                 group_match = re.search(r'\["groupName"\]\s*=\s*"([^"]+)"', content[search_idx:])
@@ -539,40 +548,14 @@ class BSPParser:
     def _build_mission_tree_content(self, mission_list):
         lines = [MASTER_TREE_PREAMBLE.strip(), ""]
 
-        campaign_groups = {}
-        multiplayer_missions = []
+        multiplayer_missions = [m for m in mission_list if m.group == "Multiplayer & Skirmish"]
 
-        for mission in mission_list:
-            if mission.group == "Multiplayer & Skirmish":
-                multiplayer_missions.append(mission)
-            else:
-                campaign_groups.setdefault(mission.group, []).append(mission)
-
-        lines.append('MissionTree["missionGroups"] = {')
-        if campaign_groups:
-            for group_name, missions in campaign_groups.items():
-                template = self.group_templates.get(group_name, {"prefix": "{", "suffix": "},"})
-                lines.append(template["prefix"].rstrip())
-
-                mission_blocks = []
-                for mission in missions:
-                    block = mission.raw_block.strip()
-                    if not block:
-                        rel_scene = mission.scn_path.replace(os.path.join("universe", "Scenes") + os.sep, "")
-                        block = (
-                            "{"
-                            f"[\"id\"] = \"{mission.id}\"," 
-                            f" [\"name\"] = \"{mission.name}\"," 
-                            f" [\"sceneFile\"] = sceneFilePath..\"{rel_scene.replace(os.sep, '/')}\""
-                            "}"
-                        )
-                    if not block.rstrip().endswith(','):
-                        block = block + ','
-                    mission_blocks.append(block)
-
-                lines.append("\n\n".join(mission_blocks))
-                lines.append(template["suffix"].lstrip())
-        lines.append("}")
+        # Always include the full single-player mission tree to avoid crashes
+        if self.mission_groups_raw:
+            lines.append(self.mission_groups_raw.strip())
+        else:
+            # Fallback to an empty missionGroups block if nothing was captured
+            lines.append('MissionTree["missionGroups"] = {}')
 
         lines.append("")
         lines.append('MissionTree["multiMissionInfos"] = {')
