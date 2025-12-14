@@ -2,11 +2,12 @@
 import os
 
 class MissionDef:
-    def __init__(self, mission_id, name, scn_path, group="Unknown"):
+    def __init__(self, mission_id, name, scn_path, group="Unknown", raw_block=""):
         self.id = mission_id
         self.name = name
         self.scn_path = scn_path
         self.group = group
+        self.raw_block = raw_block
 
 class UnitDef:
     def __init__(self, unit_id, name, code, unit_type, lua_content):
@@ -19,5 +20,6 @@ class UnitDef:
 # Common paths relative to the Game Root
 PATH_MASTER_LUA = os.path.join("scripts", "datatables", "autoload", "Master_vehicleclasses.lua")
 PATH_MISSION_TREE = os.path.join("scripts", "datatables", "missiontree.lua")
+PATH_MASTER_MISSION_TREE = os.path.join("scripts", "datatables", "master_missiontree.lua")
 PATH_GLOBAL_ENUMS = os.path.join("universe", "library", "global.enums")
 PATH_ALWAYS_INCLUDE = os.path.join("scripts", "datatables", "autoload", "AlwaysInclude_vehicleclasses.lua")
