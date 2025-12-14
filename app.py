@@ -2,7 +2,12 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import os
-from bsp_data import PATH_MASTER_LUA, PATH_MISSION_TREE, PATH_GLOBAL_ENUMS, PATH_ALWAYS_INCLUDE
+from bsp_data import (
+    PATH_ALWAYS_INCLUDE,
+    PATH_GLOBAL_ENUMS,
+    PATH_MASTER_LUA,
+    PATH_MASTER_MISSION_TREE,
+)
 from bsp_parser import BSPParser
 
 class App:
@@ -38,7 +43,7 @@ class App:
         self.group_combo.bind("<<ComboboxSelected>>", self.apply_filter)
 
         # --- Mission List ---
-        self.tree = ttk.Treeview(root, columns=("ID", "Name", "Group"), show='headings')
+        self.tree = ttk.Treeview(root, columns=("ID", "Name", "Group"), show='headings', selectmode="extended")
         self.tree.heading("ID", text="ID")
         self.tree.heading("Name", text="Mission Name")
         self.tree.heading("Group", text="Campaign/Group")
@@ -79,6 +84,11 @@ class App:
             messagebox.showerror("Error", "Could not find 'scripts/datatables/autoload/Master_vehicleclasses.lua'.\nCheck the directory.")
             return
 
+        master_tree_path = os.path.join(gd, PATH_MASTER_MISSION_TREE)
+        if not os.path.exists(master_tree_path):
+            messagebox.showerror("Error", "Could not find 'scripts/datatables/master_missiontree.lua'.\nCheck the directory.")
+            return
+
         self.status_var.set("Status: Parsing files... please wait.")
         self.root.update()
 
@@ -111,7 +121,7 @@ class App:
             print("UnitLib Load Warning:", res)
 
         # Load Missions
-        res = self.parser.load_missions(os.path.join(gd, PATH_MISSION_TREE))
+        res = self.parser.load_missions(master_tree_path)
         if "Error" in res:
             messagebox.showerror("Error", res)
             return
@@ -148,22 +158,35 @@ class App:
 
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Warning", "Please select a mission from the list.")
+            messagebox.showwarning("Warning", "Please select at least one mission from the list.")
             return
 
-        item = self.tree.item(selected[0])
-        mission_id = item['values'][0]
-        
-        # Find mission obj
-        mission = next((m for m in self.all_missions if m.id == str(mission_id)), None)
-        
-        if mission:
-            res = self.parser.generate_mission_loader(mission)
-            if "Error" in res:
-                messagebox.showerror("Failed", res)
-            else:
-                messagebox.showinfo("Success", res)
-                self.status_var.set(f"Status: Generated loader for {mission.name}")
+        missions = []
+        for item_id in selected:
+            item = self.tree.item(item_id)
+            mission_id = item['values'][0]
+            mission = next((m for m in self.all_missions if m.id == str(mission_id)), None)
+            if mission:
+                missions.append(mission)
+
+        if not missions:
+            messagebox.showwarning("Warning", "No valid missions selected.")
+            return
+
+        if len(missions) > 1:
+            proceed = messagebox.askyesno(
+                "Unstable Combination",
+                "Loading multiple missions at once can be unstable. Continue anyway?",
+            )
+            if not proceed:
+                return
+
+        res = self.parser.generate_for_missions(missions)
+        if "Error" in res:
+            messagebox.showerror("Failed", res)
+        else:
+            messagebox.showinfo("Success", res)
+            self.status_var.set(f"Status: Generated loader for {', '.join(m.name for m in missions)}")
 
 if __name__ == "__main__":
     root = tk.Tk()

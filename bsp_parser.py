@@ -20,6 +20,66 @@ ALWAYS_INCLUDE_ENUMS = {
     "PlaneClasses", "ShipClasses", "VehicleClasses"
 }
 
+MASTER_TREE_PREAMBLE = """DoFile(\"scripts/datatables/MultiGlobals.lua\")
+function luaOverrideMultiLobbySettings(overrideTable)
+    --overrideTabla formatuma meg kell egyezzen a MultiGlobals.lua MultiLobbySettings tabla szerkezetevel. Csak a MenuDIS parameter updatelodik!
+    local uniqueMultiSettings
+    if overrideTable == nil then
+        return nil
+    else
+        if not type(overrideTable)=="table" then
+            return nil
+        else
+            uniqueMultiSettings = {}
+        end
+    end
+
+    for multiKey, multiValue in pairs (MultiLobbySettings) do
+        uniqueMultiSettings[multiKey] = {}
+        for paramKey, paramValue in pairs (multiValue) do
+            uniqueMultiSettings[multiKey][paramKey] = {}
+            local overrideUsed = false
+            if overrideTable[multiKey] then
+                if overrideTable[multiKey][paramKey] then
+                    if overrideTable[multiKey][paramKey].MenuDIS ~= nil then
+                        uniqueMultiSettings[multiKey][paramKey].MenuDIS = overrideTable[multiKey][paramKey].MenuDIS
+                        overrideUsed = true
+                    end
+                end
+            end
+            if not overrideUsed and paramValue.MenuDIS ~= nil then
+                uniqueMultiSettings[multiKey][paramKey].MenuDIS = paramValue.MenuDIS
+            end
+        end
+    end
+
+    return uniqueMultiSettings
+end
+
+---- SETTING GAMEMODE PARAMETERS -----
+
+--DoFile(\"gamemode.lua\") -- Getting the gamemode from \"gamemode.lua\"
+
+local sceneFilePath
+--local sceneFilePathTraining
+
+--[[if GameMode == 1 then -- Realistic
+
+    sceneFilePath = \"universe/Scenes/realistic/missions/\"
+    sceneFilePathTraining = \"universe/Scenes/realistic/\"
+
+else -- Arcade]]
+
+    sceneFilePath = \"universe/Scenes/missions/\"
+    --sceneFilePathTraining = \"universe/Scenes/\"
+
+--end
+
+---- MISSION TREES START ----
+
+MissionTree = {}
+"""
+
 class BSPParser:
     def __init__(self, game_root):
         self.root = game_root
@@ -32,6 +92,9 @@ class BSPParser:
         self.non_unit_lua = []
         self.always_include_lua = ""
         self.always_include_ids = set()
+        self.group_templates = {}
+        self.mission_groups_raw = ""
+        self.multi_template = {"prefix": "", "suffix": ""}
 
     def load_always_include(self, path):
         """Loads the AlwaysInclude_vehicleclasses.lua file."""
@@ -84,7 +147,9 @@ class BSPParser:
 
             first_match = re.search(r'VehicleClass\s*\[', content)
             if first_match:
-                self.non_unit_lua.append(content[:first_match.start()])
+                prefix = re.sub(r'VehicleClass\s*=\s*\{\}', '', content[:first_match.start()]).strip()
+                if prefix:
+                    self.non_unit_lua.append(prefix)
 
             pattern = re.compile(r'VehicleClass\s*\[\s*(\d+)\s*\]\s*=')
             
@@ -209,37 +274,116 @@ class BSPParser:
             return f"Error loading Master UnitLib: {e}"
         return "Success"
 
+    def _extract_block(self, content: str, start_idx: int) -> str:
+        """Extracts a brace-delimited block starting at start_idx."""
+        if start_idx < 0 or start_idx >= len(content) or content[start_idx] != '{':
+            return ""
+
+        depth = 1
+        idx = start_idx + 1
+        while idx < len(content) and depth > 0:
+            if content[idx] == '{':
+                depth += 1
+            elif content[idx] == '}':
+                depth -= 1
+            idx += 1
+        return content[start_idx:idx]
+
+    def _extract_blocks(self, segment: str):
+        blocks = []
+        idx = 0
+        while idx < len(segment):
+            if segment[idx] == '{':
+                depth = 1
+                start = idx
+                idx += 1
+                while idx < len(segment) and depth > 0:
+                    if segment[idx] == '{':
+                        depth += 1
+                    elif segment[idx] == '}':
+                        depth -= 1
+                    idx += 1
+                blocks.append(segment[start:idx])
+            else:
+                idx += 1
+        return blocks
+
     def load_missions(self, path):
         """Loads missions from missiontree.lua"""
         print("Loading Mission Tree...")
         try:
             with open(path, 'r', encoding='latin-1') as f:
                 content = f.read()
-            
-            # Campaign
-            group_pattern = re.compile(r'\["groupName"\]\s*=\s*"([^"]+)"(.*?)(?=\["groupName"\]|----\s*MULTIPLAYER|\Z)', re.DOTALL)
-            mission_pattern = re.compile(r'\["id"\]\s*=\s*"([^"]+)".*?\["name"\]\s*=\s*"([^"]+)".*?\["sceneFile"\]\s*=\s*([^,]+),', re.DOTALL)
 
-            for group_match in group_pattern.finditer(content):
+            self.group_templates = {}
+            self.missions = []
+
+            # Capture full missionGroups block for direct reuse (prevents crashes when omitted)
+            mg_match = re.search(r'MissionTree\s*\[\s*"missionGroups"\s*\]\s*=\s*\{', content)
+            if mg_match:
+                mg_brace_start = content.find('{', mg_match.end() - 1)
+                mg_block = self._extract_block(content, mg_brace_start)
+                mg_prefix = content[mg_match.start():mg_brace_start]
+                self.mission_groups_raw = f"{mg_prefix}{mg_block}"
+
+            search_idx = 0
+            while True:
+                group_match = re.search(r'\["groupName"\]\s*=\s*"([^"]+)"', content[search_idx:])
+                if not group_match:
+                    break
+
+                absolute_start = search_idx + group_match.start()
                 group_name = group_match.group(1)
-                group_body = group_match.group(2)
-                for m in mission_pattern.finditer(group_body):
-                    m_id = m.group(1)
-                    m_name = m.group(2)
-                    raw_scene = m.group(3).replace('sceneFilePath..', '').replace('"', '').strip()
-                    full_scene_path = os.path.join("universe", "Scenes", "missions", raw_scene.replace('/', os.sep))
-                    self.missions.append(MissionDef(m_id, m_name, full_scene_path, group_name))
+                brace_start = content.rfind('{', 0, absolute_start)
+                group_block = self._extract_block(content, brace_start)
+                search_idx = brace_start + len(group_block)
 
-            # Multiplayer
-            mp_section = re.search(r'----\s*MULTIPLAYER.*?MissionTree\s*\[\s*"multiMissionInfos"\s*\]\s*=\s*\{(.*?)\}(?=\s*----|\Z)', content, re.DOTALL)
-            if mp_section:
-                mp_iter = re.finditer(r'\{.*?\["id"\]\s*=\s*"([^"]+)".*?\["name"\]\s*=\s*"([^"]+)".*?\["sceneFile"\]\s*=\s*([^,]+),.*?\}', mp_section.group(1), re.DOTALL)
-                for m in mp_iter:
-                    m_id = m.group(1)
-                    m_name = m.group(2)
-                    raw_scene = m.group(3).replace('sceneFilePath..', '').replace('"', '').strip()
+                missions_key_idx = group_block.find('["missions"]')
+                if missions_key_idx == -1:
+                    continue
+
+                missions_block_start = group_block.find('{', missions_key_idx)
+                missions_block = self._extract_block(group_block, missions_block_start)
+
+                prefix = group_block[:missions_block_start + 1]
+                suffix = group_block[missions_block_start + len(missions_block):]
+                self.group_templates[group_name] = {"prefix": prefix, "suffix": suffix}
+
+                for mission_block in self._extract_blocks(missions_block[1:-1]):
+                    id_match = re.search(r'\["id"\]\s*=\s*"([^"]+)"', mission_block)
+                    name_match = re.search(r'\["name"\]\s*=\s*"([^"]+)"', mission_block)
+                    scene_match = re.search(r'\["sceneFile"\]\s*=\s*([^,}]+)', mission_block)
+
+                    if not (id_match and name_match and scene_match):
+                        continue
+
+                    m_id = id_match.group(1)
+                    m_name = name_match.group(1)
+                    raw_scene = scene_match.group(1).replace('sceneFilePath..', '').replace('"', '').strip()
                     full_scene_path = os.path.join("universe", "Scenes", "missions", raw_scene.replace('/', os.sep))
-                    self.missions.append(MissionDef(m_id, m_name, full_scene_path, "Multiplayer & Skirmish"))
+                    self.missions.append(MissionDef(m_id, m_name, full_scene_path, group_name, mission_block))
+
+            multi_section_match = re.search(r'MissionTree\s*\[\s*"multiMissionInfos"\s*\]\s*=\s*\{', content)
+            if multi_section_match:
+                multi_block_start = content.find('{', multi_section_match.end() - 1)
+                multi_block = self._extract_block(content, multi_block_start)
+                self.multi_template = {
+                    "prefix": "MissionTree[\"multiMissionInfos\"] = " + multi_block[:1],
+                    "suffix": multi_block[len(multi_block) - 1 :],
+                }
+
+                for mission_block in self._extract_blocks(multi_block[1:-1]):
+                    id_match = re.search(r'\["id"\]\s*=\s*"([^"]+)"', mission_block)
+                    name_match = re.search(r'\["name"\]\s*=\s*"([^"]+)"', mission_block)
+                    scene_match = re.search(r'\["sceneFile"\]\s*=\s*([^,}]+)', mission_block)
+                    if not (id_match and name_match and scene_match):
+                        continue
+
+                    m_id = id_match.group(1)
+                    m_name = name_match.group(1)
+                    raw_scene = scene_match.group(1).replace('sceneFilePath..', '').replace('"', '').strip()
+                    full_scene_path = os.path.join("universe", "Scenes", "missions", raw_scene.replace('/', os.sep))
+                    self.missions.append(MissionDef(m_id, m_name, full_scene_path, "Multiplayer & Skirmish", mission_block))
 
         except Exception as e:
             return f"Error loading Mission Tree: {e}"
@@ -253,67 +397,86 @@ class BSPParser:
                 found_ids.add(self.enums[code])
         return found_ids
 
-    def generate_mission_loader(self, mission_def):
+    def _collect_required_ids(self, mission_def: MissionDef):
         scn_full_path = os.path.join(self.root, mission_def.scn_path)
         if not os.path.exists(scn_full_path):
-            return f"Error: SCN file not found at {scn_full_path}"
+            return None, f"Error: SCN file not found at {scn_full_path}"
 
         required_ids = set()
-        
-        # --- 1. SCAN SCN ---
+
         try:
             with open(scn_full_path, 'r', encoding='latin-1') as f:
                 content = f.read()
-            
-            # Matches: Type = E ShipClasses : CodeName
+
             matches = re.findall(r'Type\s*=\s*E\s+([a-zA-Z0-9_]+)\s*:\s*([a-zA-Z0-9_-]+)', content)
-            
+
             for class_type, code in matches:
-                if class_type in IGNORED_SCN_CLASSES: continue 
-                if class_type not in ALWAYS_INCLUDE_ENUMS: continue
+                if class_type in IGNORED_SCN_CLASSES:
+                    continue
+                if class_type not in ALWAYS_INCLUDE_ENUMS:
+                    continue
 
                 if code in self.enums:
                     unit_id = self.enums[code]
                     required_ids.add(unit_id)
         except Exception as e:
-            return f"Error parsing SCN: {e}"
+            return None, f"Error parsing SCN: {e}"
 
-        # --- 2. DEPENDENCY CHECK ---
         ids_to_process = list(required_ids)
         processed_ids = set()
-        
+
         while ids_to_process:
             current_id = ids_to_process.pop(0)
-            if current_id in processed_ids: continue
+            if current_id in processed_ids:
+                continue
             processed_ids.add(current_id)
 
             if current_id in self.master_units:
                 unit_lua = self.master_units[current_id].lua_content
                 dependencies = self._find_dependencies(unit_lua)
-                
+
                 for dep_id in dependencies:
                     if dep_id not in required_ids:
                         required_ids.add(dep_id)
                         ids_to_process.append(dep_id)
 
-        # --- 3. WRITE VehicleClass.lua ---
+        return required_ids, None
+
+    def generate_mission_loader(self, mission_def):
+        return self.generate_for_missions([mission_def])
+
+    def generate_for_missions(self, mission_list):
+        if not mission_list:
+            return "Error: No missions provided"
+
+        combined_ids = set()
+        for mission_def in mission_list:
+            mission_ids, err = self._collect_required_ids(mission_def)
+            if err:
+                return err
+            combined_ids.update(mission_ids)
+
+        mission_label = ", ".join(m.name for m in mission_list)
+
         vc_lines = []
         vc_lines.append("VehicleClass = {}")
-        vc_lines.append(f"-- Mission: {mission_def.name}")
-        
+        vc_lines.append(f"-- Mission: {mission_label}")
+
         if self.always_include_lua:
             vc_lines.append("\n-- Always Include:")
             vc_lines.append(self.always_include_lua)
-        
+
         vc_lines.append("\n-- Global Logic:")
         vc_lines.extend(self.non_unit_lua)
-        
+
         vc_lines.append("\n-- Mission Units:")
         vc_write_count = 0
-        
-        for uid in sorted(required_ids):
-            if uid <= 1: continue 
-            if uid in self.always_include_ids: continue
+
+        for uid in sorted(combined_ids):
+            if uid <= 1:
+                continue
+            if uid in self.always_include_ids:
+                continue
 
             if uid in self.master_units:
                 vc_lines.append(self.master_units[uid].lua_content)
@@ -325,12 +488,12 @@ class BSPParser:
         ul_lines = []
         # Use captured header or default
         ul_lines.append(self.unitlib_header.strip() if self.unitlib_header else "UnitLib = {")
-        ul_lines.append(f"-- Filtered UnitLib for Mission: {mission_def.name}")
+        ul_lines.append(f"-- Filtered UnitLib for Mission: {mission_label}")
 
         ul_write_count = 0
 
         # Combine AlwaysInclude IDs + Mission Required IDs for UnitLib
-        all_needed_ids = required_ids.union(self.always_include_ids)
+        all_needed_ids = combined_ids.union(self.always_include_ids)
 
         for group in self.unitlib_groups:
             filtered_entries = [(vc_id, block) for vc_id, block in group["entries"] if vc_id in all_needed_ids]
@@ -356,17 +519,52 @@ class BSPParser:
 
         ul_path = os.path.join(self.root, "scripts", "datatables", "UnitLib.lua")
 
+        mission_tree_content = self._build_mission_tree_content(mission_list)
+        mission_tree_path = os.path.join(self.root, "scripts", "datatables", "missiontree.lua")
+
         try:
             os.makedirs(os.path.dirname(vc_path), exist_ok=True)
             os.makedirs(os.path.dirname(ul_path), exist_ok=True)
-            
+
             with open(vc_path, 'w', encoding='utf-8') as f:
                 f.write("\n\n".join(vc_lines))
-                
+
             with open(ul_path, 'w', encoding='utf-8') as f:
                 f.write("\n".join(ul_lines))
-                
+
+            with open(mission_tree_path, 'w', encoding='utf-8') as f:
+                f.write(mission_tree_content)
+
         except Exception as e:
             return f"Error writing Output: {e}"
 
-        return f"Success! Generated:\nVehicleClass: {vc_write_count} units\nUnitLib: {ul_write_count} entries"
+        return (
+            "Success! Generated:\n"
+            f"VehicleClass: {vc_write_count} units\n"
+            f"UnitLib: {ul_write_count} entries\n"
+            f"missiontree.lua with {len(mission_list)} selected mission(s)"
+        )
+
+    def _build_mission_tree_content(self, mission_list):
+        lines = [MASTER_TREE_PREAMBLE.strip(), ""]
+
+        multiplayer_missions = [m for m in mission_list if m.group == "Multiplayer & Skirmish"]
+
+        # Always include the full single-player mission tree to avoid crashes
+        if self.mission_groups_raw:
+            lines.append(self.mission_groups_raw.strip())
+        else:
+            # Fallback to an empty missionGroups block if nothing was captured
+            lines.append('MissionTree["missionGroups"] = {}')
+
+        lines.append("")
+        lines.append('MissionTree["multiMissionInfos"] = {')
+        if multiplayer_missions:
+            for mission in multiplayer_missions:
+                block = mission.raw_block.strip()
+                if not block.rstrip().endswith(','):
+                    block = block + ','
+                lines.append(block)
+        lines.append("}")
+
+        return "\n".join(lines)
