@@ -520,7 +520,7 @@ class BSPParser:
         ul_path = os.path.join(self.root, "scripts", "datatables", "UnitLib.lua")
 
         mission_tree_content = self._build_mission_tree_content(mission_list)
-        mission_tree_path = os.path.join(self.root, "scripts", "datatables", "master_missiontree.lua")
+        mission_tree_path = os.path.join(self.root, "scripts", "datatables", "missiontree.lua")
 
         try:
             os.makedirs(os.path.dirname(vc_path), exist_ok=True)
@@ -542,7 +542,7 @@ class BSPParser:
             "Success! Generated:\n"
             f"VehicleClass: {vc_write_count} units\n"
             f"UnitLib: {ul_write_count} entries\n"
-            f"master_missiontree.lua with {len(mission_list)} selected mission(s)"
+            f"missiontree.lua with {len(mission_list)} selected mission(s)"
         )
 
     def _build_mission_tree_content(self, mission_list):
