@@ -95,6 +95,29 @@ class BSPParser:
         self.group_templates = {}
         self.mission_groups_raw = ""
         self.multi_template = {"prefix": "", "suffix": ""}
+        self.multi_block_raw = ""
+
+    def _normalize_scene_path(self, raw_scene: str) -> str:
+        """Cleans a raw scene path coming from missiontree.lua definitions.
+
+        Historically, some multiplayer entries used the pattern
+        `sceneFilePath .. "multi/scene11.scn"` (with spaces around the
+        concatenation operator). The previous implementation only stripped the
+        exact substring "sceneFilePath..", which failed to match the spaced
+        variant. That produced incorrect file paths such as
+        "sceneFilePath .. multi/scene11.scn", causing single-player loads to
+        crash when the wrong path was written out. This helper normalizes both
+        spaced and unspaced variants to return the relative scene file path.
+        """
+
+        cleaned = raw_scene.replace('"', '').strip()
+        cleaned = re.sub(r'sceneFilePath\s*\.\.\s*', '', cleaned)
+
+        # Some entries now specify the full base path directly (e.g.
+        # "universe/Scenes/missions/USN/..."). Strip that prefix so we do not
+        # duplicate it when we later join with the base missions directory.
+        cleaned = re.sub(r'^universe/Scenes/missions/+', '', cleaned, flags=re.IGNORECASE)
+        return cleaned
 
     def load_always_include(self, path):
         """Loads the AlwaysInclude_vehicleclasses.lua file."""
@@ -359,7 +382,7 @@ class BSPParser:
 
                     m_id = id_match.group(1)
                     m_name = name_match.group(1)
-                    raw_scene = scene_match.group(1).replace('sceneFilePath..', '').replace('"', '').strip()
+                    raw_scene = self._normalize_scene_path(scene_match.group(1))
                     full_scene_path = os.path.join("universe", "Scenes", "missions", raw_scene.replace('/', os.sep))
                     self.missions.append(MissionDef(m_id, m_name, full_scene_path, group_name, mission_block))
 
@@ -367,9 +390,16 @@ class BSPParser:
             if multi_section_match:
                 multi_block_start = content.find('{', multi_section_match.end() - 1)
                 multi_block = self._extract_block(content, multi_block_start)
+                self.multi_block_raw = (
+                    "MissionTree[\"multiMissionInfos\"] = " + multi_block
+                )
+
+                # Preserve the original opening brace with the prefix so that an
+                # empty multiplayer list still yields a syntactically valid
+                # block when written back out.
                 self.multi_template = {
-                    "prefix": "MissionTree[\"multiMissionInfos\"] = " + multi_block[:1],
-                    "suffix": multi_block[len(multi_block) - 1 :],
+                    "prefix": content[multi_section_match.start(): multi_block_start + 1],
+                    "suffix": content[multi_block_start + len(multi_block) - 1: multi_block_start + len(multi_block)],
                 }
 
                 for mission_block in self._extract_blocks(multi_block[1:-1]):
@@ -381,7 +411,7 @@ class BSPParser:
 
                     m_id = id_match.group(1)
                     m_name = name_match.group(1)
-                    raw_scene = scene_match.group(1).replace('sceneFilePath..', '').replace('"', '').strip()
+                    raw_scene = self._normalize_scene_path(scene_match.group(1))
                     full_scene_path = os.path.join("universe", "Scenes", "missions", raw_scene.replace('/', os.sep))
                     self.missions.append(MissionDef(m_id, m_name, full_scene_path, "Multiplayer & Skirmish", mission_block))
 
@@ -548,23 +578,72 @@ class BSPParser:
     def _build_mission_tree_content(self, mission_list):
         lines = [MASTER_TREE_PREAMBLE.strip(), ""]
 
-        multiplayer_missions = [m for m in mission_list if m.group == "Multiplayer & Skirmish"]
-
-        # Always include the full single-player mission tree to avoid crashes
         if self.mission_groups_raw:
             lines.append(self.mission_groups_raw.strip())
         else:
-            # Fallback to an empty missionGroups block if nothing was captured
             lines.append('MissionTree["missionGroups"] = {}')
 
         lines.append("")
-        lines.append('MissionTree["multiMissionInfos"] = {')
-        if multiplayer_missions:
-            for mission in multiplayer_missions:
+
+        mp_missions = [m for m in mission_list if m.group == "Multiplayer & Skirmish"]
+        mp_block = self._build_multiplayer_block(mp_missions)
+        lines.append(mp_block.strip())
+
+        return "\n".join(lines)
+
+    def _build_singleplayer_groups(self, missions):
+        if not missions:
+            return ""
+
+        grouped = {}
+        for mission in missions:
+            grouped.setdefault(mission.group, []).append(mission)
+
+        lines = ['MissionTree["missionGroups"] = {']
+
+        for group_name, group_missions in grouped.items():
+            template = self.group_templates.get(group_name)
+            if not template:
+                # If the template is missing, we cannot safely rebuild the block.
+                # Bail out so the caller can fall back to the raw mission tree.
+                return ""
+
+            group_lines = [template["prefix"].rstrip()]
+
+            for mission in group_missions:
+                block = mission.raw_block.strip()
+                if not block.rstrip().endswith(','):
+                    block = block + ','
+                group_lines.append(block)
+
+            group_lines.append(template["suffix"].lstrip())
+
+            group_block = "\n".join(group_lines)
+            if not group_block.rstrip().endswith(','):
+                group_block = group_block + ','
+
+            lines.append(group_block)
+
+        lines.append("}")
+        return "\n".join(lines)
+
+    def _build_multiplayer_block(self, missions):
+        if not missions:
+            return 'MissionTree["multiMissionInfos"] = {}'
+
+        if self.multi_template["prefix"] and self.multi_template["suffix"]:
+            lines = [self.multi_template["prefix"].rstrip()]
+
+            for mission in missions:
                 block = mission.raw_block.strip()
                 if not block.rstrip().endswith(','):
                     block = block + ','
                 lines.append(block)
-        lines.append("}")
 
-        return "\n".join(lines)
+            lines.append(self.multi_template["suffix"].lstrip())
+            return "\n".join(lines)
+
+        if self.multi_block_raw:
+            return self.multi_block_raw.strip()
+
+        return 'MissionTree["multiMissionInfos"] = {}'
