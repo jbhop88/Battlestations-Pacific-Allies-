@@ -393,9 +393,13 @@ class BSPParser:
                 self.multi_block_raw = (
                     "MissionTree[\"multiMissionInfos\"] = " + multi_block
                 )
+
+                # Preserve the original opening brace with the prefix so that an
+                # empty multiplayer list still yields a syntactically valid
+                # block when written back out.
                 self.multi_template = {
-                    "prefix": 'MissionTree["multiMissionInfos"] = {',
-                    "suffix": '}',
+                    "prefix": content[multi_section_match.start(): multi_block_start + 1],
+                    "suffix": content[multi_block_start + len(multi_block) - 1: multi_block_start + len(multi_block)],
                 }
 
                 for mission_block in self._extract_blocks(multi_block[1:-1]):
