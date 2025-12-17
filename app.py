@@ -215,8 +215,8 @@ class App:
             messagebox.showinfo("No Missions", "Select one or more missions to remove.")
             return
 
-        to_remove_ids = set(self.selected_tree.item(item)['values'][0] for item in selected_items)
-        self.selected_missions = [m for m in self.selected_missions if m.id not in to_remove_ids]
+        to_remove_ids = set(str(self.selected_tree.item(item)['values'][0]) for item in selected_items)
+        self.selected_missions = [m for m in self.selected_missions if str(m.id) not in to_remove_ids]
         self.refresh_selected_tree()
 
     def refresh_selected_tree(self):
@@ -238,7 +238,25 @@ class App:
             messagebox.showerror("Multiplayer Required", "Select at least one multiplayer mission to generate the loader.")
             return
 
-        if len(self.selected_missions) > 1:
+        # Ensure the Dreadnought map is always present alongside any MP choice.
+        dreadnought = next(
+            (
+                m
+                for m in self.all_missions
+                if m.group == "Multiplayer & Skirmish"
+                and (str(m.id) == "29" or "scene1.scn" in m.scn_path or "dread" in m.name.lower())
+            ),
+            None,
+        )
+        if has_multiplayer and dreadnought and dreadnought not in self.selected_missions:
+            self.selected_missions.append(dreadnought)
+            self.refresh_selected_tree()
+            messagebox.showinfo(
+                "Dreadnought Added",
+                "The Dreadnought multiplayer map must be included. It has been added to your selection.",
+            )
+
+        if len(self.selected_missions) >= 3:
             proceed = messagebox.askyesno(
                 "Unstable Combination",
                 "Loading multiple missions at once can be unstable. Continue anyway?",
