@@ -96,6 +96,28 @@ class BSPParser:
         self.mission_groups_raw = ""
         self.multi_template = {"prefix": "", "suffix": ""}
 
+    def _normalize_scene_path(self, raw_scene: str) -> str:
+        """Cleans a raw scene path coming from missiontree.lua definitions.
+
+        Historically, some multiplayer entries used the pattern
+        `sceneFilePath .. "multi/scene11.scn"` (with spaces around the
+        concatenation operator). The previous implementation only stripped the
+        exact substring "sceneFilePath..", which failed to match the spaced
+        variant. That produced incorrect file paths such as
+        "sceneFilePath .. multi/scene11.scn", causing single-player loads to
+        crash when the wrong path was written out. This helper normalizes both
+        spaced and unspaced variants to return the relative scene file path.
+        """
+
+        cleaned = raw_scene.replace('"', '').strip()
+        cleaned = re.sub(r'sceneFilePath\s*\.\.\s*', '', cleaned)
+
+        # Some entries now specify the full base path directly (e.g.
+        # "universe/Scenes/missions/USN/..."). Strip that prefix so we do not
+        # duplicate it when we later join with the base missions directory.
+        cleaned = re.sub(r'^universe/Scenes/missions/+', '', cleaned, flags=re.IGNORECASE)
+        return cleaned
+
     def load_always_include(self, path):
         """Loads the AlwaysInclude_vehicleclasses.lua file."""
         print("Loading Always Include VehicleClasses...")
@@ -359,7 +381,7 @@ class BSPParser:
 
                     m_id = id_match.group(1)
                     m_name = name_match.group(1)
-                    raw_scene = scene_match.group(1).replace('sceneFilePath..', '').replace('"', '').strip()
+                    raw_scene = self._normalize_scene_path(scene_match.group(1))
                     full_scene_path = os.path.join("universe", "Scenes", "missions", raw_scene.replace('/', os.sep))
                     self.missions.append(MissionDef(m_id, m_name, full_scene_path, group_name, mission_block))
 
@@ -381,7 +403,7 @@ class BSPParser:
 
                     m_id = id_match.group(1)
                     m_name = name_match.group(1)
-                    raw_scene = scene_match.group(1).replace('sceneFilePath..', '').replace('"', '').strip()
+                    raw_scene = self._normalize_scene_path(scene_match.group(1))
                     full_scene_path = os.path.join("universe", "Scenes", "missions", raw_scene.replace('/', os.sep))
                     self.missions.append(MissionDef(m_id, m_name, full_scene_path, "Multiplayer & Skirmish", mission_block))
 
