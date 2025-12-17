@@ -95,6 +95,7 @@ class BSPParser:
         self.group_templates = {}
         self.mission_groups_raw = ""
         self.multi_template = {"prefix": "", "suffix": ""}
+        self.multi_block_raw = ""
 
     def _normalize_scene_path(self, raw_scene: str) -> str:
         """Cleans a raw scene path coming from missiontree.lua definitions.
@@ -389,6 +390,9 @@ class BSPParser:
             if multi_section_match:
                 multi_block_start = content.find('{', multi_section_match.end() - 1)
                 multi_block = self._extract_block(content, multi_block_start)
+                self.multi_block_raw = (
+                    "MissionTree[\"multiMissionInfos\"] = " + multi_block
+                )
                 self.multi_template = {
                     "prefix": "MissionTree[\"multiMissionInfos\"] = " + multi_block[:1],
                     "suffix": multi_block[len(multi_block) - 1 :],
@@ -570,30 +574,17 @@ class BSPParser:
     def _build_mission_tree_content(self, mission_list):
         lines = [MASTER_TREE_PREAMBLE.strip(), ""]
 
-        multiplayer_missions = [m for m in mission_list if m.group == "Multiplayer & Skirmish"]
-        singleplayer_missions = [m for m in mission_list if m.group != "Multiplayer & Skirmish"]
-
-        # Build a tailored single-player mission tree so we do not reference
-        # missions that were not selected (which would crash when their units
-        # are missing from the generated VehicleClass/UnitLib files).
-        mission_groups = self._build_singleplayer_groups(singleplayer_missions)
-        if mission_groups:
-            lines.append(mission_groups)
-        elif self.mission_groups_raw:
+        if self.mission_groups_raw:
             lines.append(self.mission_groups_raw.strip())
         else:
-            # Fallback to an empty missionGroups block if nothing was captured
             lines.append('MissionTree["missionGroups"] = {}')
 
         lines.append("")
-        lines.append('MissionTree["multiMissionInfos"] = {')
-        if multiplayer_missions:
-            for mission in multiplayer_missions:
-                block = mission.raw_block.strip()
-                if not block.rstrip().endswith(','):
-                    block = block + ','
-                lines.append(block)
-        lines.append("}")
+
+        if self.multi_block_raw:
+            lines.append(self.multi_block_raw.strip())
+        else:
+            lines.append('MissionTree["multiMissionInfos"] = {}')
 
         return "\n".join(lines)
 
