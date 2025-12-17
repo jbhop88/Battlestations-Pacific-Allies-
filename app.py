@@ -73,7 +73,7 @@ class App:
         tk.Button(mid_frame, text="<<", command=self.remove_selection, width=6).pack()
 
         # Selected missions
-        right_frame = tk.LabelFrame(list_frame, text="Selected Missions (include at least one multiplayer map)")
+        right_frame = tk.LabelFrame(list_frame, text="Selected Missions")
         right_frame.pack(side="left", fill="both", expand=True, padx=(5, 0), pady=5)
 
         self.selected_tree = ttk.Treeview(right_frame, columns=("ID", "Name", "Group"), show='headings', selectmode="extended")
@@ -233,12 +233,7 @@ class App:
             messagebox.showwarning("Warning", "Please add missions to the selection list first.")
             return
 
-        has_multiplayer = any(m.group == "Multiplayer & Skirmish" for m in self.selected_missions)
-        if not has_multiplayer:
-            messagebox.showerror("Multiplayer Required", "Select at least one multiplayer mission to generate the loader.")
-            return
-
-        # Ensure the Dreadnought map is always present alongside any MP choice.
+        # Ensure the Dreadnought map is always present.
         dreadnought = next(
             (
                 m
@@ -248,15 +243,15 @@ class App:
             ),
             None,
         )
-        if has_multiplayer and dreadnought and dreadnought not in self.selected_missions:
+        if dreadnought and dreadnought not in self.selected_missions:
             self.selected_missions.append(dreadnought)
             self.refresh_selected_tree()
             messagebox.showinfo(
                 "Dreadnought Added",
-                "The Dreadnought multiplayer map must be included. It has been added to your selection.",
+                "Mission 01 Dreadnought is required for multiplayer stability and has been included automatically.",
             )
 
-        if len(self.selected_missions) >= 3:
+        if len(self.selected_missions) > 5:
             proceed = messagebox.askyesno(
                 "Unstable Combination",
                 "Loading multiple missions at once can be unstable. Continue anyway?",
