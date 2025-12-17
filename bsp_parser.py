@@ -394,8 +394,8 @@ class BSPParser:
                     "MissionTree[\"multiMissionInfos\"] = " + multi_block
                 )
                 self.multi_template = {
-                    "prefix": "MissionTree[\"multiMissionInfos\"] = " + multi_block[:1],
-                    "suffix": multi_block[len(multi_block) - 1 :],
+                    "prefix": 'MissionTree["multiMissionInfos"] = {',
+                    "suffix": '}',
                 }
 
                 for mission_block in self._extract_blocks(multi_block[1:-1]):
@@ -581,10 +581,9 @@ class BSPParser:
 
         lines.append("")
 
-        if self.multi_block_raw:
-            lines.append(self.multi_block_raw.strip())
-        else:
-            lines.append('MissionTree["multiMissionInfos"] = {}')
+        mp_missions = [m for m in mission_list if m.group == "Multiplayer & Skirmish"]
+        mp_block = self._build_multiplayer_block(mp_missions)
+        lines.append(mp_block.strip())
 
         return "\n".join(lines)
 
@@ -623,3 +622,24 @@ class BSPParser:
 
         lines.append("}")
         return "\n".join(lines)
+
+    def _build_multiplayer_block(self, missions):
+        if not missions:
+            return 'MissionTree["multiMissionInfos"] = {}'
+
+        if self.multi_template["prefix"] and self.multi_template["suffix"]:
+            lines = [self.multi_template["prefix"].rstrip()]
+
+            for mission in missions:
+                block = mission.raw_block.strip()
+                if not block.rstrip().endswith(','):
+                    block = block + ','
+                lines.append(block)
+
+            lines.append(self.multi_template["suffix"].lstrip())
+            return "\n".join(lines)
+
+        if self.multi_block_raw:
+            return self.multi_block_raw.strip()
+
+        return 'MissionTree["multiMissionInfos"] = {}'
