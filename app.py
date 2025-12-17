@@ -14,11 +14,12 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("BSP Mission Loader Tool")
-        self.root.geometry("700x500")
+        self.root.geometry("920x600")
         
         self.parser = None
         self.game_dir = tk.StringVar()
         self.all_missions = [] # Store all for filtering
+        self.selected_missions = []
 
         # --- Directory Selection ---
         tk.Label(root, text="Battlestations Pacific Directory:", font=('bold')).pack(pady=(10, 5))
@@ -42,27 +43,58 @@ class App:
         self.group_combo.pack(side="left", padx=5)
         self.group_combo.bind("<<ComboboxSelected>>", self.apply_filter)
 
-        # --- Mission List ---
-        self.tree = ttk.Treeview(root, columns=("ID", "Name", "Group"), show='headings', selectmode="extended")
+        # --- Mission Selection Layout ---
+        list_frame = tk.Frame(root)
+        list_frame.pack(fill="both", expand=True, padx=10)
+
+        # Available missions
+        left_frame = tk.LabelFrame(list_frame, text="Available Missions")
+        left_frame.pack(side="left", fill="both", expand=True, padx=(0, 5), pady=5)
+
+        self.tree = ttk.Treeview(left_frame, columns=("ID", "Name", "Group"), show='headings', selectmode="extended")
         self.tree.heading("ID", text="ID")
         self.tree.heading("Name", text="Mission Name")
         self.tree.heading("Group", text="Campaign/Group")
-        
+
         self.tree.column("ID", width=80)
-        self.tree.column("Name", width=300)
-        self.tree.column("Group", width=150)
-        
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(root, orient="vertical", command=self.tree.yview)
+        self.tree.column("Name", width=320)
+        self.tree.column("Group", width=160)
+
+        scrollbar = ttk.Scrollbar(left_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
-        
-        self.tree.pack(side="left", fill="both", expand=True, padx=(10, 0))
-        scrollbar.pack(side="right", fill="y", padx=(0, 10))
+
+        self.tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # Buttons between lists
+        mid_frame = tk.Frame(list_frame)
+        mid_frame.pack(side="left", fill="y", pady=5)
+        tk.Button(mid_frame, text=">>", command=self.add_selection, width=6).pack(pady=(40, 5))
+        tk.Button(mid_frame, text="<<", command=self.remove_selection, width=6).pack()
+
+        # Selected missions
+        right_frame = tk.LabelFrame(list_frame, text="Selected Missions (include at least one multiplayer map)")
+        right_frame.pack(side="left", fill="both", expand=True, padx=(5, 0), pady=5)
+
+        self.selected_tree = ttk.Treeview(right_frame, columns=("ID", "Name", "Group"), show='headings', selectmode="extended")
+        self.selected_tree.heading("ID", text="ID")
+        self.selected_tree.heading("Name", text="Mission Name")
+        self.selected_tree.heading("Group", text="Campaign/Group")
+
+        self.selected_tree.column("ID", width=80)
+        self.selected_tree.column("Name", width=320)
+        self.selected_tree.column("Group", width=160)
+
+        sel_scrollbar = ttk.Scrollbar(right_frame, orient="vertical", command=self.selected_tree.yview)
+        self.selected_tree.configure(yscrollcommand=sel_scrollbar.set)
+
+        self.selected_tree.pack(side="left", fill="both", expand=True)
+        sel_scrollbar.pack(side="right", fill="y")
 
         # --- Action ---
         btn_frame = tk.Frame(root)
         btn_frame.pack(fill="x", padx=10, pady=10)
-        
+
         tk.Button(btn_frame, text="GENERATE LOADER", command=self.generate, bg="#aaffaa", height=2).pack(fill="x")
         
         self.status_var = tk.StringVar()
@@ -127,6 +159,8 @@ class App:
             return
 
         self.all_missions = self.parser.missions
+        self.selected_missions = []
+        self.refresh_selected_tree()
         
         # Setup Filter with proper grouping
         groups = sorted(list(set(m.group for m in self.all_missions)))
@@ -144,36 +178,67 @@ class App:
 
     def apply_filter(self, event=None):
         selected_group = self.group_combo.get()
-        
+
         self.tree.delete(*self.tree.get_children())
-        
+
         for m in self.all_missions:
             if selected_group == "All Missions" or m.group == selected_group:
                 self.tree.insert("", "end", values=(m.id, m.name, m.group))
+
+    def add_selection(self):
+        if not self.parser:
+            messagebox.showwarning("Warning", "Please load game data first.")
+            return
+
+        selected_items = self.tree.selection()
+        if not selected_items:
+            messagebox.showinfo("No Missions", "Select one or more missions to add.")
+            return
+
+        added = 0
+        for item_id in selected_items:
+            item = self.tree.item(item_id)
+            mission_id = item['values'][0]
+            mission = next((m for m in self.all_missions if m.id == str(mission_id)), None)
+            if mission and mission not in self.selected_missions:
+                self.selected_missions.append(mission)
+                added += 1
+
+        if added:
+            self.refresh_selected_tree()
+        else:
+            messagebox.showinfo("Already Added", "Selected missions are already in the list.")
+
+    def remove_selection(self):
+        selected_items = self.selected_tree.selection()
+        if not selected_items:
+            messagebox.showinfo("No Missions", "Select one or more missions to remove.")
+            return
+
+        to_remove_ids = set(self.selected_tree.item(item)['values'][0] for item in selected_items)
+        self.selected_missions = [m for m in self.selected_missions if m.id not in to_remove_ids]
+        self.refresh_selected_tree()
+
+    def refresh_selected_tree(self):
+        self.selected_tree.delete(*self.selected_tree.get_children())
+        for m in self.selected_missions:
+            self.selected_tree.insert("", "end", values=(m.id, m.name, m.group))
 
     def generate(self):
         if not self.parser:
             messagebox.showwarning("Warning", "Please load game data first.")
             return
 
-        selected = self.tree.selection()
-        if not selected:
-            messagebox.showwarning("Warning", "Please select at least one mission from the list.")
+        if not self.selected_missions:
+            messagebox.showwarning("Warning", "Please add missions to the selection list first.")
             return
 
-        missions = []
-        for item_id in selected:
-            item = self.tree.item(item_id)
-            mission_id = item['values'][0]
-            mission = next((m for m in self.all_missions if m.id == str(mission_id)), None)
-            if mission:
-                missions.append(mission)
-
-        if not missions:
-            messagebox.showwarning("Warning", "No valid missions selected.")
+        has_multiplayer = any(m.group == "Multiplayer & Skirmish" for m in self.selected_missions)
+        if not has_multiplayer:
+            messagebox.showerror("Multiplayer Required", "Select at least one multiplayer mission to generate the loader.")
             return
 
-        if len(missions) > 1:
+        if len(self.selected_missions) > 1:
             proceed = messagebox.askyesno(
                 "Unstable Combination",
                 "Loading multiple missions at once can be unstable. Continue anyway?",
@@ -181,12 +246,12 @@ class App:
             if not proceed:
                 return
 
-        res = self.parser.generate_for_missions(missions)
+        res = self.parser.generate_for_missions(self.selected_missions)
         if "Error" in res:
             messagebox.showerror("Failed", res)
         else:
             messagebox.showinfo("Success", res)
-            self.status_var.set(f"Status: Generated loader for {', '.join(m.name for m in missions)}")
+            self.status_var.set(f"Status: Generated loader for {', '.join(m.name for m in self.selected_missions)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
