@@ -571,9 +571,15 @@ class BSPParser:
         lines = [MASTER_TREE_PREAMBLE.strip(), ""]
 
         multiplayer_missions = [m for m in mission_list if m.group == "Multiplayer & Skirmish"]
+        singleplayer_missions = [m for m in mission_list if m.group != "Multiplayer & Skirmish"]
 
-        # Always include the full single-player mission tree to avoid crashes
-        if self.mission_groups_raw:
+        # Build a tailored single-player mission tree so we do not reference
+        # missions that were not selected (which would crash when their units
+        # are missing from the generated VehicleClass/UnitLib files).
+        mission_groups = self._build_singleplayer_groups(singleplayer_missions)
+        if mission_groups:
+            lines.append(mission_groups)
+        elif self.mission_groups_raw:
             lines.append(self.mission_groups_raw.strip())
         else:
             # Fallback to an empty missionGroups block if nothing was captured
@@ -589,4 +595,40 @@ class BSPParser:
                 lines.append(block)
         lines.append("}")
 
+        return "\n".join(lines)
+
+    def _build_singleplayer_groups(self, missions):
+        if not missions:
+            return ""
+
+        grouped = {}
+        for mission in missions:
+            grouped.setdefault(mission.group, []).append(mission)
+
+        lines = ['MissionTree["missionGroups"] = {']
+
+        for group_name, group_missions in grouped.items():
+            template = self.group_templates.get(group_name)
+            if not template:
+                # If the template is missing, we cannot safely rebuild the block.
+                # Bail out so the caller can fall back to the raw mission tree.
+                return ""
+
+            group_lines = [template["prefix"].rstrip()]
+
+            for mission in group_missions:
+                block = mission.raw_block.strip()
+                if not block.rstrip().endswith(','):
+                    block = block + ','
+                group_lines.append(block)
+
+            group_lines.append(template["suffix"].lstrip())
+
+            group_block = "\n".join(group_lines)
+            if not group_block.rstrip().endswith(','):
+                group_block = group_block + ','
+
+            lines.append(group_block)
+
+        lines.append("}")
         return "\n".join(lines)
